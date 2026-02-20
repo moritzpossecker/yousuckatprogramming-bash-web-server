@@ -16,10 +16,17 @@ accept -b "$ADDRESS" -v fd -r ip "$PORT"
 while read -u "$fd" line; do
 	line=${line%$'\r'}
 	echo "got data: $line"
-
+	
+	# no more headers
 	if [[ -z $line ]]; then
 		break
 	fi
 done
+
+# reply
+printf 'HTTP/1.1 200 OK\r\n' >&"$fd"
+printf 'Content-Type: text/plain\r\n' >&"$fd"
+printf '\r\n' >&"$fd"
+printf 'hello!\n' >&"$fd"
 
 exec {fd}>&-
