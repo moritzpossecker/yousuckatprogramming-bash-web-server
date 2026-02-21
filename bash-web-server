@@ -8,25 +8,71 @@ fatal() {
 	exit 1
 }
 
-enable accept || fatal 'failed to load accept'
+parse-request() {
+        declare -gA REQ_INFO=()
+        declare -gA REQ_HEADERS=()
 
-echo "listening on http://$ADDRESS:$PORT"
-accept -b "$ADDRESS" -v fd -r ip "$PORT"
+        local state='status'
+        local line
+        while read -r line; do
+                line=${line%$'\r'}
 
-while read -u "$fd" line; do
-	line=${line%$'\r'}
-	echo "got data: $line"
+                case "$state" in
+                        'status')
+                                # parse the satus line
+                                # "GET /foo.txt HTTP/1.1"
+                                local method path version
+                                read -r method path version <<< "$line"
+                                REQ_INFO[method]=$method
+                                REQ_INFO[path]=$path
+                                REQ_INFO[version]=$version
+                                state='headers'
+                                ;;
+                        'headers')
+                                # parse the headers
+                                if [[ -z $line ]]; then
+                                        # TODO: maybe support body
+                                        break
+                                fi
+
+                                local key value
+                                IFS=: read -r key value <<< "$line"
+                                key=${key,,}
+                                value=${value# *}
+                                REQ_HEADERS[$key]=$value
+                                ;;
+                        'body')
+                                fatal 'body parsing not supported'
+                                ;;
+                esac
+
+        done
+}
+
+main() {
+
+	enable accept || fatal 'failed to load accept'
+
+	echo "listening on http://$ADDRESS:$PORT"
+
+	local fd ip
+	accept -b "$ADDRESS" -v fd -r ip "$PORT" || fatal 'failed to read socket'
+	parse-request <&"$fd"
 	
-	# no more headers
-	if [[ -z $line ]]; then
-		break
-	fi
-done
+	# validate the request
+	[[ ${REQ_INFO[version]} == 'HTTP/1.1' ]] || fatal 'unsupported HTTP version'
+	[[ ${REQ_INFO[method]} == 'GET' ]] || fatal 'unsupported HTTP method'
+	[[ ${REQ_INFO[version]} == */ ]] || fatal 'path must be absolute'
 
-# reply
-printf 'HTTP/1.1 200 OK\r\n' >&"$fd"
-printf 'Content-Type: text/plain\r\n' >&"$fd"
-printf '\r\n' >&"$fd"
-printf 'hello!\n' >&"$fd"
+	echo "${REQ_INFO[method]} ${REQ_INFO[path]}"
 
-exec {fd}>&-
+	# reply
+	printf 'HTTP/1.1 200 OK\r\n' >&"$fd"
+	printf 'Content-Type: text/plain\r\n' >&"$fd"
+	printf '\r\n' >&"$fd"
+	cat file.txt >&"$fd"
+
+	exec {fd}>&-
+}
+
+main "$@"
